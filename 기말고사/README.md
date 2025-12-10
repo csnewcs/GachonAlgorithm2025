@@ -5,7 +5,9 @@
 해당 서비스는 OPENAI의 GPT5-mini를 사용해요. 여기서 비용이 발생할 수 있어요. 만약 공개되어도 괜찮은 정보들만 올라온다면 `Share inputs and outputs with OpenAI` 옵션을 활성화해 비용을 절감할 수 있어요.
 ## 필요 패키지
 ```
-Flask
+flask
+flask-cors
+dotenv
 pypdf2
 ```
 ## 실행 전에
@@ -19,4 +21,4 @@ pypdf2
    GOOGLE_API_KEY=구글 프로젝트의 API 키
    GOOGLE_SEARCHENGINE_ID=구글 커스텀 검색 엔진의 ID
    ``` 
-4. 현재 서버는 localhost:5000에서 돌아감을 상정하고 클라이언트 코드가 짜여 있어요. 만일 다른 환경이라면 [index.html](./frontend/index.html)의 103줄을 수정 후 실행해주세요
+4. 현재 서버는 localhost:8080에서 돌아감을 상정하고 클라이언트 코드가 짜여 있어요. 만일 다른 환경이라면 [index.html](./frontend/index.html)의 103줄을 수정 후 실행해주세요
