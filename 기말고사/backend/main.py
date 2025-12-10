@@ -1,25 +1,24 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import os
-import sqlite3
 import re
 import time
-import json
 from pathlib import Path
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
-import shutil
+import database
+from threading import Thread
+import queue
+import json
 
-# .env 파일 로드
-load_dotenv()
-
+database = database.Database()
 app = Flask(__name__)
-CORS(app, supports_credentials=True)
+CORS(app)
 
-# SQLite 데이터베이스 경로
-DATABASE = 'users.db'
+
 UPLOAD_DIR = Path('uploads')
 EXTRACT_DIR = Path('extracted')
+REPORT_DIR = Path('reports')
+MAXIMUM_LENGTH = 10000
 
 # 지원되는 확장자
 ALLOWED_EXT = {'.pdf'}
@@ -30,31 +29,96 @@ try:
 except Exception:
     _HAS_PYPDF2 = False
 
-def get_db():
-    """데이터베이스 연결"""
-    db = sqlite3.connect(DATABASE)
-    db.row_factory = sqlite3.Row
-    return db
+def get_simillarity(text, refs):
+    from LCS import find_lcs_positions
+    from ngram import ngram_similarity
+    simillarities = []
+    for r in refs:
+        print(r['title'])
+        if r is None:
+            continue
+        lcs_result = find_lcs_positions(text, r['text'])
+        ngram_sim = ngram_similarity(text, r['text'], n=3)
+        simillarities.append({
+            'title': r['title'],
+            'lcs_length': lcs_result['lcs_length'],
+            'ngram_similarity': ngram_sim
+        })
+        
+    return simillarities
 
-def init_db():
-    """데이터베이스 초기화"""
-    if not os.path.exists(DATABASE):
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        db.commit()
-        db.close()
 
-# 앱 시작 시 데이터베이스 초기화
-init_db()
+def check(user_id, filename):
+    import crolling
+    import checkAi
 
-@app.route('/upload', methods=['POST', 'OPTIONS'])
+    files = database.get_user_files(user_id)
+    result = []
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
+    for file_path in files:
+        stored_path = file_path['path']
+        file_name = Path(stored_path).name
+        extract_path = EXTRACT_DIR / f"{file_name.split('_')[0]}.txt"
+        report_file_path = REPORT_DIR / user_id / f"{file_name}_report.json"
+        # 만약 이미 만들어진 리포트 있으면 스킵
+        if report_file_path.exists() or not extract_path.exists():
+            continue
+
+        with open(extract_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+            text = text[:MAXIMUM_LENGTH]  # 너무 긴 텍스트는 자르기
+        
+        # AI 작성 여부 체크
+        ai_q = queue.Queue()
+        ai_check_thread = Thread(target=checkAi.checkGPT, args=(text, ai_q))
+        ai_check_thread.start()
+        
+        # 키워드 기반 크롤링
+        keywords = database.get_keywords_for_file(stored_path)
+        references = crolling.fetch_references(keywords, database)
+        print(references.keys())
+        # LCS, ngram 유사도 계산
+        similarities = []
+        for ref, search in references.items():
+            similarities.extend(get_simillarity(text, search))
+        
+
+        ai_check_thread.join()
+        ai_score = ai_q.get()
+        ref_links = {kw: [item['link'] for item in items] for kw, items in references.items()}
+        # 리포트 생성(JSON)
+        content = {
+            'file': file_name,
+            'keywords': keywords,
+            'similarities': similarities,
+            'ai_generated_score': ai_score,
+            'references_link': ref_links
+        }
+
+        report_file_path.parent.mkdir(parents=True, exist_ok=True)    
+            
+        with open(report_file_path, 'w', encoding='utf-8') as report_file:
+            report_file.write(json.dumps(content, ensure_ascii=False, indent=4))
+    
+        # 리포트 데이터베이스에 입력
+        max_sim = max([s['ngram_similarity'] for s in similarities], default=0)
+        database.add_report_for_file(stored_path, max_sim, ai_score)
+    
+
+def extract_text_from_pdf(fileName):
+    """PDF 파일에서 텍스트 추출"""
+    if not _HAS_PYPDF2:
+        raise ImportError("PyPDF2 모듈이 설치되어 있지 않습니다.")
+    
+    text = ""
+    with open(fileName, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
+        for page in reader.pages:
+            text += page.extract_text() + "\n"
+    return text
+
+@app.route('/file', methods=['POST', 'OPTIONS'])
 def upload_file():
     """파일 업로드 처리"""
     if request.method == 'OPTIONS':
@@ -62,6 +126,9 @@ def upload_file():
     
     if 'file' not in request.files:
         return {'error': 'No file part'}, 400
+    
+    if not request.form.get('user_id'):
+        return {'error': 'User ID is required'}, 400
     
     file = request.files['file']
     if file.filename == '':
@@ -72,6 +139,11 @@ def upload_file():
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXT:
         return {'error': '지원하지 않는 파일 형식입니다. PDF만 업로드 가능'}, 400
+    
+    if request.form.get('keywords'):
+        keywords = request.form.get('keywords').split(',')
+    else:
+        keywords = []
 
     # 디렉터리 생성
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -83,7 +155,37 @@ def upload_file():
     stored_path = UPLOAD_DIR / stored_name
     file.save(str(stored_path))
 
-    return {'message': f'File saved', 'filename': stored_name, 'path': str(stored_path)}, 201
+    # 텍스트 추출
+    try:
+        extracted_text = extract_text_from_pdf(stored_path)
+        extract_file_path = EXTRACT_DIR / f"{ts}.txt"
+        database.add_file_for_user(request.form.get('user_id'), str(stored_path), filename)
+    except Exception as e:
+        return {'error': f'텍스트 추출 실패: {str(e)}'}, 500
+    
+    # 줄바꿈 제거
+    extracted_text = extracted_text.replace('\n', ' ').replace('\r', ' ')
+
+    #공백 제거
+    extracted_text = re.sub(r'\s+', ' ', extracted_text).strip()
+    with open(extract_file_path, 'w', encoding='utf-8') as text_file:
+        text_file.write(extracted_text)
+
+    # 키워드 추출
+    if len(keywords) == 0:
+        from mode import select_keywords
+        keywords = select_keywords([extracted_text], top_n=5)
+
+    database.add_keywords_for_file(str(stored_path), keywords)
+
+    return {'message': f'File saved', 'filename': stored_name, 'keywords': keywords}, 200
+
+@app.route('/file/<user_id>', methods=['GET', 'OPTIONS'])
+def get_files_for_user(user_id):
+    if request.method == 'OPTIONS':
+        return '', 200
+    files = database.get_user_files(user_id)
+    return {'files': files}, 200
 
 @app.route('/signup', methods=['POST', 'OPTIONS'])
 def signup():
@@ -100,18 +202,15 @@ def signup():
     
     if len(username) < 2:
         return {'error': '아이디는 2글자 이상이어야 합니다'}, 400
+    if not re.match(r'^[a-zA-Z0-9_]+$', username):
+        return {'error': '아이디는 영문자, 숫자, 밑줄(_)만 사용할 수 있습니다'}, 400 #injection 방지
     
-    try:
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute('INSERT INTO users (username) VALUES (?)', (username,))
-        db.commit()
-        db.close()
-        return {'message': f'{username}님 회원가입이 완료되었습니다'}, 201
-    except sqlite3.IntegrityError:
+    if database.is_username_exists(username):
         return {'error': '이미 존재하는 아이디입니다'}, 409
-    except Exception as e:
-        return {'error': str(e)}, 500
+    if database.add_user(username):
+        return {'message': f'{username}님 회원가입이 완료되었습니다'}, 200
+    else:
+        return {'error': '회원가입에 실패했습니다'}, 500
 
 @app.route('/login', methods=['POST', 'OPTIONS'])
 def login():
@@ -126,326 +225,53 @@ def login():
     
     username = data.get('username').strip()
     
-    try:
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute('SELECT id, username FROM users WHERE username = ?', (username,))
-        user = cursor.fetchone()
-        db.close()
-        
-        if user:
-            return {'id': user['id'], 'username': user['username']}, 200
-        else:
-            return {'error': '가입하지 않은 아이디입니다'}, 401
-    except Exception as e:
-        return {'error': str(e)}, 500
+    user_id = database.get_user_id_by_username(username)
+    if user_id is None:
+        return {'error': '존재하지 않는 아이디입니다'}, 404
+    return {'message': f'{username}님 로그인 성공', 'user_id': user_id}, 200
 
-@app.route('/file', methods=['POST', 'OPTIONS'])
-def upload_and_extract():
-    """1. 업로드된 파일을 임시 저장
-       2. 파일에서 텍스트 추출
-       3. 추출된 텍스트를 임시파일로 저장 후(원하면) 원본 삭제
-    """
+@app.route('/check_all', methods=['GET', 'OPTIONS'])
+def check_all():
+    """텍스트 유사도 및 AI 작성 여부 체크"""
     if request.method == 'OPTIONS':
         return '', 200
 
-    if 'file' not in request.files:
-        return {'error': 'No file part'}, 400
-    file = request.files['file']
-    if file.filename == '':
-        return {'error': 'No selected file'}, 400
+    data = request.args
+    userid = data.get('user_id')
+    files = database.get_user_files(userid)
+    if not files:
+        return {'error': '사용자 파일이 없습니다'}, 404
+    
+    thread = Thread(target=check, args=(userid, files))
+    thread.start()
+    return {'message': '확인을 시작하겠습니다! 잠시 후 확인해주세요!'}, 200
 
-    filename = secure_filename(file.filename)
-    ext = Path(filename).suffix.lower()
-    if ext not in ALLOWED_EXT:
-        return {'error': '지원하지 않는 파일 형식입니다. PDF만 업로드 가능'}, 400
+@app.route('/reports/<user_id>/<filename>', methods=['GET'])
+def get_report(user_id, filename):
+    # SQL 저장되어 있는 것만 보기
+    report = database.get_report(user_id, filename)
+    if not report:
+        return {'error': '리포트를 찾을 수 없습니다'}, 404
+    return report, 200
 
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+@app.route('/reports/<user_id>/<filename>/content', methods=['GET'])
+def get_report_content(user_id, filename):
+    report_path = REPORT_DIR / user_id / filename
+    if not report_path.exists():
+        return {'error': '리포트를 찾을 수 없습니다'}, 404
+    with open(report_path, 'r', encoding='utf-8') as report_file:
+        content = json.load(report_file)
+    return content, 200
 
-    # 사용자 아이디 (form field 'user')
-    user = request.form.get('user') or 'anonymous'
-    # 사용자별 추출 폴더
-    user_extract_dir = EXTRACT_DIR / str(user)
-    user_extract_dir.mkdir(parents=True, exist_ok=True)
+@app.route('/reports/<user_id>', methods=['GET'])
+def list_reports(user_id):
+    user_report_dir = REPORT_DIR / user_id
+    if not user_report_dir.exists():
+        return {'reports': []}, 200
+    reports = [f.name for f in user_report_dir.iterdir() if f.is_file()]
+    return {'reports': reports}, 200
 
-    ts = int(time.time() * 1000)
-    stored_name = f"{ts}_{filename}"
-    stored_path = UPLOAD_DIR / stored_name
-    file.save(str(stored_path))
 
-    extracted_text = ''
-    if _HAS_PYPDF2:
-        try:
-            reader = PyPDF2.PdfReader(str(stored_path))
-            pages_text = []
-            for p in reader.pages:
-                try:
-                    pages_text.append(p.extract_text() or '')
-                except Exception:
-                    pages_text.append('')
-            extracted_text = '\n'.join(pages_text)
-        except Exception as e:
-            return {'error': 'PDF 텍스트 추출 실패: ' + str(e)}, 500
-    else:
-        extracted_text = ''
-
-    # 추출된 텍스트 저장: 사용자 폴더 아래에 저장
-    txt_name = stored_name + '.txt'
-    txt_path = user_extract_dir / txt_name
-    try:
-        with open(txt_path, 'w', encoding='utf-8') as fw:
-            fw.write(extracted_text)
-    except Exception as e:
-        return {'error': '텍스트 저장 실패: ' + str(e)}, 500
-
-    # 원본 PDF 삭제 (요청에 따라 서버에 보관하지 않음)
-    try:
-        if stored_path.exists():
-            stored_path.unlink()
-    except Exception:
-        pass
-
-    return {'message': '파일 업로드 및 텍스트 추출 완료', 'pdf': stored_name, 'text_file': str(txt_path.relative_to(EXTRACT_DIR))}, 201
-
-@app.route('/combine_check', methods=['GET','POST','OPTIONS'])
-def start_combine_check():
-    """간단한 통합 검사 프로토타입 구현
-
-    - 추출된 텍스트(`extracted/`)에서 단어 빈도 계산
-    - 상위 키워드 제공 (stopwords 필터링 간단히 적용)
-    - 파일별 기본 메타(이름, 크기)와 통계 반환
-    """
-    # 모듈 연동: mode.py, crolling.py, LCS.py, ngram.py 사용
-    try:
-        from backend import mode as mode_mod
-    except Exception:
-        try:
-            import mode as mode_mod
-        except Exception:
-            mode_mod = None
-    try:
-        from backend import crolling as crolling_mod
-    except Exception:
-        try:
-            import crolling as crolling_mod
-        except Exception:
-            crolling_mod = None
-    try:
-        from backend import LCS as LCS_mod
-    except Exception:
-        try:
-            import LCS as LCS_mod
-        except Exception:
-            LCS_mod = None
-
-    EXTRACT_DIR.mkdir(parents=True, exist_ok=True)
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-    # Handle preflight quickly
-    if request.method == 'OPTIONS':
-        return '', 200
-
-    # Accept payload with { user: <userId>, files: [<server_filenames>] }
-    payload = {}
-    try:
-        payload = request.get_json() or {}
-    except Exception:
-        payload = {}
-
-    user = payload.get('user')
-    requested_files = payload.get('files') or []
-
-    # Optionally save mapping for audit
-    map_file = Path('user_file_map.json')
-    try:
-        if user and requested_files:
-            try:
-                if map_file.exists():
-                    existing = json.loads(map_file.read_text(encoding='utf-8'))
-                else:
-                    existing = {}
-            except Exception:
-                existing = {}
-            existing[str(user)] = requested_files
-            try:
-                map_file.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding='utf-8')
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-    # Find requested text files. Prefer user directory if provided.
-    text_files = []
-    user_dir = None
-    if user:
-        user_dir = EXTRACT_DIR / str(user)
-        if user_dir.exists():
-            # if specific files given, look for them in this dir
-            if requested_files:
-                for req in requested_files:
-                    p = user_dir / (req + '.txt')
-                    if p.exists():
-                        text_files.append(p)
-            else:
-                text_files = sorted(user_dir.glob('*.txt'))
-
-    # If no files found yet and requested_files were provided, search across all user subdirs
-    if not text_files and requested_files:
-        for req in requested_files:
-            try:
-                matches = list(EXTRACT_DIR.rglob(req + '.txt'))
-            except Exception:
-                matches = []
-            for m in matches:
-                if m.exists():
-                    text_files.append(m)
-
-    # Fallback: gather any extracted text
-    if not text_files:
-        text_files = sorted(EXTRACT_DIR.glob('*/*.txt'))
-
-    if not text_files:
-        return {'message': '추출된 텍스트 파일이 없습니다. 먼저 파일을 업로드하고 텍스트를 추출하세요.'}, 200
-
-    # 파일별 텍스트 읽기
-    file_texts = []
-    for tf in text_files:
-        try:
-            txt = tf.read_text(encoding='utf-8')
-        except Exception:
-            txt = ''
-        file_texts.append({'name': tf.name, 'text': txt})
-
-    # 3) 비교 (LCS + n-gram) — 파일별 개별 검사
-    comparisons = []
-    # try to import ngram module
-    try:
-        from backend import ngram as ngram_mod
-    except Exception:
-        try:
-            import ngram as ngram_mod
-        except Exception:
-            ngram_mod = None
-
-    # 파일 개별로 검사 수행
-    # 클라이언트가 전역 키워드를 보냈는지 확인
-    client_keywords = None
-    try:
-        raw_client_kw = payload.get('keywords') if isinstance(payload, dict) else None
-        if raw_client_kw:
-            if isinstance(raw_client_kw, str):
-                client_keywords = [k.strip() for k in re.split(r'[,;]+', raw_client_kw) if k.strip()]
-            elif isinstance(raw_client_kw, list):
-                client_keywords = [str(k).strip() for k in raw_client_kw if str(k).strip()]
-    except Exception as e:
-        client_keywords = None
-        print(f"[DEBUG] client_keywords parsing error: {e}")
-
-    print(f"[DEBUG] client_keywords: {client_keywords}")
-    print(f"[DEBUG] file_texts count: {len(file_texts)}")
-
-    for f in file_texts:
-        file_entry = {'file': f['name'], 'comparisons': []}
-
-        # 1) 각 파일별로 키워드 선정: 클라이언트 제공 키워드 우선, 없으면 mode에서 추출
-        keywords = []
-        if client_keywords and len(client_keywords) > 0:
-            keywords = client_keywords
-            print(f"[DEBUG] Using client keywords: {keywords}")
-        else:
-            if mode_mod and f['text']:
-                try:
-                    keywords = mode_mod.select_keywords([f['text']], top_n=5)
-                    print(f"[DEBUG] Extracted keywords via mode: {keywords}")
-                except Exception as e:
-                    keywords = []
-                    print(f"[DEBUG] mode.select_keywords error: {e}")
-            else:
-                print(f"[DEBUG] mode_mod or file text not available")
-        
-        # 2) 크롤링(위키) — 참조 텍스트 수집
-        references = {}
-        if crolling_mod and keywords:
-            try:
-                print(f"[DEBUG] Fetching references for keywords: {keywords}")
-                references = crolling_mod.fetch_references(keywords, max_per=2)
-                print(f"[DEBUG] References fetched: {len(references)} keywords, total refs: {sum(len(v) for v in references.values())}")
-            except Exception as e:
-                references = {}
-                print(f"[DEBUG] crolling.fetch_references error: {e}")
-        
-        # 3) 비교 수행
-        print(f"[DEBUG] Processing file {f['name']}, references: {len(references)} keywords")
-        comp_count = 0
-        for kw, refs in references.items():
-            print(f"[DEBUG] Keyword '{kw}': {len(refs)} references")
-            for ref in refs:
-                ref_text = ref.get('text', '') or ''
-                score = 0.0
-                positions = None
-                if LCS_mod and f['text'] and ref_text:
-                    try:
-                        # 비교 대상 텍스트가 길면 앞부분으로 제한하여 성능 확보
-                        a = f['text'][:5000]
-                        b = ref_text[:5000]
-                        score = LCS_mod.similarity_score(a, b)
-                        # 겹치는 부분의 위치 추적
-                        positions = LCS_mod.find_lcs_positions(a, b)
-                    except Exception as e:
-                        score = 0.0
-                        positions = None
-                # n-gram 유사도도 계산
-                ngram_score = None
-                if ngram_mod and f['text'] and ref_text:
-                    try:
-                        ngram_score = ngram_mod.ngram_similarity(f['text'], ref_text, n=3)
-                    except Exception as e:
-                        ngram_score = None
-                comp_entry = {'keyword': kw, 'ref_title': ref.get('title'), 'lcs_score': round(score, 4), 'ngram_score': (round(ngram_score,4) if ngram_score is not None else None)}
-                if positions:
-                    comp_entry['positions'] = positions
-                file_entry['comparisons'].append(comp_entry)
-                comp_count += 1
-        print(f"[DEBUG] Completed {comp_count} comparisons for file {f['name']}")
-
-        
-        file_entry['keywords'] = keywords
-        comparisons.append(file_entry)
-
-    # 반환할 결과 생성
-    result = {
-        'file_count': len(file_texts),
-        'files': [f['name'] for f in file_texts],
-        'comparisons': comparisons
-    }
-
-    # 통합 검사 완료 후 해당 사용자 디렉터리 삭제 (안전하게)
-    try:
-        # determine user_dir: if user_dir set above use it, else infer from text_files[0]
-        if user_dir is None and text_files:
-            # txt path looks like extracted/<user>/<file>.txt
-            try:
-                p = text_files[0]
-                user_dir = p.parent
-            except Exception:
-                user_dir = None
-        if user_dir and user_dir.exists():
-            try:
-                shutil.rmtree(user_dir)
-            except Exception:
-                # best-effort: try unlink individual files
-                try:
-                    for tf in text_files:
-                        try:
-                            tf.unlink()
-                        except Exception:
-                            pass
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-    return result, 200
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)

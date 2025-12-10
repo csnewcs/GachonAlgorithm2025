@@ -1,23 +1,4 @@
-def lcs_length(a, b):
-    """Longest Common Subsequence length for two strings (DP)."""
-    if not a or not b:
-        return 0
-    la, lb = len(a), len(b)
-    dp = [0] * (lb + 1)
-    for i in range(1, la + 1):
-        prev = 0
-        ai = a[i-1]
-        for j in range(1, lb + 1):
-            temp = dp[j]
-            if ai == b[j-1]:
-                dp[j] = prev + 1
-            else:
-                if dp[j-1] > dp[j]:
-                    dp[j] = dp[j-1]
-            prev = temp
-    return dp[lb]
-
-def find_lcs_positions(a, b):
+def find_lcs_positions(a, b) -> dict:
     """LCS를 추적하여 a, b에서 겹치는 부분의 구간(시작, 끝)을 반환합니다.
     
     returns: {
@@ -88,8 +69,8 @@ def similarity_score(a, b):
     if not a or not b:
         return 0.0
     # 문자열 길이 기준으로 정규화 (최소 길이로 나눔)
-    l = lcs_length(a, b)
+    lcs = find_lcs_positions(a, b)
     denom = min(len(a), len(b))
     if denom == 0:
         return 0.0
-    return float(l) / denom
+    return lcs, lcs['lcs_length'] / denom

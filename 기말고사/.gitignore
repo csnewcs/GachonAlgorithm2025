@@ -4,3 +4,4 @@ backend/__pycache__
 backend/uploads
 backend/extracted
 backend/user_file_map.json
+backend/reports

@@ -10,8 +10,13 @@ pypdf2
 ```
 ## 실행 전에
 1. [필요 패키지들을](./README.md#필요-패키지) 확인하고 설치해주세요
-2. src 디렉터리에 .env파일을 만들고 다음과 같이 채워주세요.
+2. OPENAPI와 Google API 설정을 각각 해주세요.
+   이번 프로젝트에서 세팅한 검색엔진 세팅은 다음과 같아요(참고용)
+   ![](https://cdn.discordapp.com/attachments/802845417875701770/1448203694490390558/image.png?ex=693a684b&is=693916cb&hm=396ec956b0ed166291e840b6d746401b31e0492c320609774d4bbfe16bc85f20&)
+3. backend 디렉터리에 .env파일을 만들고 다음과 같이 채워주세요.
    ```
    OPENAI_API_KEY=크레딧이 충전되어있는 OPENAPI에서 발급받은 API 키
-   ```
-3. 
+   GOOGLE_API_KEY=구글 프로젝트의 API 키
+   GOOGLE_SEARCHENGINE_ID=구글 커스텀 검색 엔진의 ID
+   ``` 
+4. 현재 서버는 localhost:5000에서 돌아감을 상정하고 클라이언트 코드가 짜여 있어요. 만일 다른 환경이라면 [index.html](./frontend/index.html)의 103줄을 수정 후 실행해주세요
