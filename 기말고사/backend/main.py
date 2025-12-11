@@ -136,7 +136,8 @@ def upload_file():
     
     # 간단한 파일 타입 검증
     original_filename = file.filename
-    filename = f'{int(time.time() * 1000)}{os.path.splitext(original_filename)[1]}'
+    ts = int(time.time() * 1000)
+    filename = f'{ts}{os.path.splitext(original_filename)[1]}'
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXT:
         return {'error': '지원하지 않는 파일 형식입니다. PDF만 업로드 가능'}, 400
@@ -151,9 +152,7 @@ def upload_file():
     EXTRACT_DIR.mkdir(parents=True, exist_ok=True)
 
     # 저장 이름 충돌 방지: 타임스탬프 추가
-    ts = int(time.time() * 1000)
-    stored_name = f"{ts}_{filename}"
-    stored_path = UPLOAD_DIR / stored_name
+    stored_path = UPLOAD_DIR / filename
     file.save(str(stored_path))
 
     # 텍스트 추출
@@ -179,7 +178,7 @@ def upload_file():
 
     database.add_keywords_for_file(str(stored_path), keywords)
 
-    return {'message': f'File saved', 'filename': stored_name, 'keywords': keywords}, 200
+    return {'message': f'File saved', 'filename': filename, 'keywords': keywords}, 200
 
 @app.route('/file/<user_id>', methods=['GET', 'OPTIONS'])
 def get_files_for_user(user_id):

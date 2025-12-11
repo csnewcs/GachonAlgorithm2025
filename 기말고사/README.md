@@ -9,6 +9,7 @@ flask
 flask-cors
 dotenv
 pypdf2
+openai
 ```
 ## 실행 전에
 1. [필요 패키지들을](./README.md#필요-패키지) 확인하고 설치해주세요
