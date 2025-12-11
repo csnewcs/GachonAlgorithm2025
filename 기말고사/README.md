@@ -4,12 +4,14 @@
 ## 유의 사항
 해당 서비스는 OPENAI의 GPT5-mini를 사용해요. 여기서 비용이 발생할 수 있어요. 만약 공개되어도 괜찮은 정보들만 올라온다면 `Share inputs and outputs with OpenAI` 옵션을 활성화해 비용을 절감할 수 있어요.
 ## 필요 패키지
+pip를 통해서 backend 에 다음 패키지들을 설치해주세요
 ```
 flask
 flask-cors
 dotenv
 pypdf2
 openai
+bs4
 ```
 ## 실행 전에
 1. [필요 패키지들을](./README.md#필요-패키지) 확인하고 설치해주세요
