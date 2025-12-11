@@ -59,10 +59,11 @@ def check(user_id, filename):
     for file_path in files:
         stored_path = file_path['path']
         file_name = Path(stored_path).name
-        extract_path = EXTRACT_DIR / f"{file_name.split('_')[0]}.txt"
+        extract_path = EXTRACT_DIR / f"{file_name}.txt"
         report_file_path = REPORT_DIR / user_id / f"{file_name}_report.json"
         # 만약 이미 만들어진 리포트 있으면 스킵
         if report_file_path.exists() or not extract_path.exists():
+            print(f'리포트가 이미 존재하거나 추출된 텍스트가 없습니다. 스킵합니다. {extract_path}')
             continue
 
         with open(extract_path, 'r', encoding='utf-8') as f:
@@ -158,7 +159,7 @@ def upload_file():
     # 텍스트 추출
     try:
         extracted_text = extract_text_from_pdf(stored_path)
-        extract_file_path = EXTRACT_DIR / f"{ts}.txt"
+        extract_file_path = EXTRACT_DIR / f"{filename}.txt"
         database.add_file_for_user(request.form.get('user_id'), str(stored_path), original_filename)
     except Exception as e:
         return {'error': f'텍스트 추출 실패: {str(e)}'}, 500
