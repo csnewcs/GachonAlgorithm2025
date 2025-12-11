@@ -1,15 +1,14 @@
-from flask import Flask, jsonify, request
+from flask import Flask, request
 from flask_cors import CORS
 import re
 import time
 from pathlib import Path
-from werkzeug.utils import secure_filename
-from dotenv import load_dotenv
 import database
 from threading import Thread
 import queue
 import json
 import ssl
+import os
 
 database = database.Database()
 app = Flask(__name__)
@@ -136,7 +135,8 @@ def upload_file():
         return {'error': 'No selected file'}, 400
     
     # 간단한 파일 타입 검증
-    filename = secure_filename(file.filename)
+    original_filename = file.filename
+    filename = f'{int(time.time() * 1000)}{os.path.splitext(original_filename)[1]}'
     ext = Path(filename).suffix.lower()
     if ext not in ALLOWED_EXT:
         return {'error': '지원하지 않는 파일 형식입니다. PDF만 업로드 가능'}, 400
@@ -160,7 +160,7 @@ def upload_file():
     try:
         extracted_text = extract_text_from_pdf(stored_path)
         extract_file_path = EXTRACT_DIR / f"{ts}.txt"
-        database.add_file_for_user(request.form.get('user_id'), str(stored_path), filename)
+        database.add_file_for_user(request.form.get('user_id'), str(stored_path), original_filename)
     except Exception as e:
         return {'error': f'텍스트 추출 실패: {str(e)}'}, 500
     
