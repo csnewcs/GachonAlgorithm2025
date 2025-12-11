@@ -78,7 +78,7 @@
                 <ul id="uploadedFileList" class="list-group list-group-flush mb-3">
                     <li class="list-group-item text-muted small">아직 업로드된 파일이 없습니다.</li>
                 </ul>
-                
+
                 <p class="card-text small text-secondary">위 파일들을 기반으로 분석을 시작합니다.</p>
                 <button onclick="handleCheckAll()" class="btn btn-warning w-100">분석 시작 (Check All)</button>
             </div>
@@ -100,8 +100,8 @@
 
 <script>
     // API 설정 (실제 백엔드 주소로 변경 필요)
-    const API_BASE_URL = 'https://localhost:8080'; 
-    
+    const API_BASE_URL = 'https://localhost:8080';
+
     // 상태 관리 변수
     let currentUserId = null;
     let currentUsername = null;
@@ -158,13 +158,13 @@
                 const data = await res.json();
                 currentUserId = data.user_id;
                 currentUsername = username;
-                
+
                 document.getElementById('welcomeMsg').textContent = `${username}님 안녕하세요!`;
                 document.getElementById('authSection').classList.add('hidden');
                 document.getElementById('dashboardSection').classList.remove('hidden');
-                
+
                 showAlert('로그인 성공!');
-                
+
                 // [추가됨] 로그인 시 서버에 있는 데이터 로드
                 fetchUploadedFiles(); // 업로드된 파일 목록 로드
                 fetchReports();       // 리포트 목록 로드
@@ -181,45 +181,57 @@
 
     // 3. 파일 업로드 (/file)
     async function handleUpload() {
-       // 1. DOM 요소 가져오기 (이 부분이 누락되어 있었습니다)
         const fileInput = document.getElementById('uploadFile');
-        const keywords = document.getElementById('uploadKeywords').value;
+        const keywordsInput = document.getElementById('uploadKeywords').value; // 입력된 문자열
 
-        // 2. 파일 선택 여부 검사
-        if (fileInput.files.length === 0) return showAlert('파일을 선택해주세요.', 'danger');
+        // 1. 파일 선택 확인
+        if (!fileInput || fileInput.files.length === 0) {
+            return showAlert('파일을 선택해주세요.', 'danger');
+        }
 
-        // 3. FormData 생성 및 데이터 추가 (이 부분이 누락되어 있었습니다)
+        // 2. FormData 생성 (Body에는 파일과 user_id만 포함)
         const formData = new FormData();
         formData.append('file', fileInput.files[0]);
-        formData.append('user_id', currentUserId);
-        
-        // 키워드가 있을 경우에만 추가
-        if (keywords) {
-            formData.append('keywords', keywords);
+        formData.append('user_id', currentUserId); // user_id는 계속 Body에 유지 (필요 시 수정 가능)
+
+        // 3. URL 생성 및 Query Parameter 추가
+        let url = `${API_BASE_URL}/file`;
+
+        if (keywordsInput) {
+            // 입력값의 공백을 제거하거나 그대로 인코딩하여 URL에 추가
+            // 예: "계약서, 2024" -> "?keywords=%EA%B3%84%EC%95%BD%EC%84%9C%2C2024"
+            const encodedKeywords = encodeURIComponent(keywordsInput);
+            url += `?keywords=${encodedKeywords}`;
         }
 
         try {
-            // 코드에 적어주신 대로 '/file' 엔드포인트로 POST 요청
-            const res = await fetch(`${API_BASE_URL}/file`, {
+            // 변경된 URL로 POST 요청 전송
+            const res = await fetch(url, {
                 method: 'POST',
                 body: formData
+                // Content-Type 헤더는 브라우저가 자동 설정 (multipart/form-data)
             });
 
             if (res.status === 200) {
                 const data = await res.json();
-                
                 showAlert(`업로드 성공!`);
-                fileInput.value = ''; // 파일 입력 초기화
-                document.getElementById('uploadKeywords').value = ''; // 키워드 입력도 초기화해주면 좋습니다
-                
-                // 서버 목록 다시 불러오기 (동기화)
-                fetchUploadedFiles(); 
+                fileInput.value = '';
+                document.getElementById('uploadKeywords').value = ''; // 키워드 입력창 초기화
+
+                // 서버 목록 갱신
+                fetchUploadedFiles();
             } else {
-                showAlert('업로드 실패', 'danger');
+                // 에러 처리
+                let errorMsg = '업로드 실패';
+                try {
+                    const errorData = await res.json();
+                    errorMsg += `: ${errorData.message || '오류 발생'}`;
+                } catch (e) {}
+                showAlert(errorMsg, 'danger');
             }
         } catch (err) {
             console.error(err);
-            showAlert('업로드 중 오류 발생', 'danger');
+            showAlert('업로드 중 통신 오류 발생', 'danger');
         }
     }
     function renderUploadedFiles(files) {
@@ -265,7 +277,7 @@
     // 4. 확인 시작 (/check_all)
     async function handleCheckAll() {
         try {
-            // 주의: 명세서에는 GET 요청에 Body를 넣으라고 되어 있으나, 
+            // 주의: 명세서에는 GET 요청에 Body를 넣으라고 되어 있으나,
             // 브라우저 fetch에서는 GET Body가 금지되어 있습니다.
             // 따라서 query string으로 user_id를 보냅니다.
             const res = await fetch(`${API_BASE_URL}/check_all?user_id=${currentUserId}`, {
@@ -295,7 +307,7 @@
             if (res.status === 200) {
                 const data = await res.json();
                 const reportNames = data.reports;
-                
+
                 // 2. 각 리포트의 상세 메타데이터 가져오기 (비동기 병렬 처리)
                 // 목록에 있는 이름마다 /reports/<id>/<filename> API를 호출합니다.
                 const reportDetailsPromises = reportNames.map(async (filename) => {
@@ -333,7 +345,7 @@
         reports.forEach(item => {
             const li = document.createElement('li');
             li.className = 'list-group-item';
-            
+
             // 데이터가 정상적으로 로드되었는지 확인
             if (item.error) {
                 li.innerHTML = `
@@ -344,7 +356,7 @@
             } else {
                 // 다운로드(상세보기) 링크: /content 엔드포인트 사용
                 const contentUrl = `${API_BASE_URL}/reports/${currentUserId}/${item.filename}/content`;
-                
+
                 // AI 생성 확률에 따른 색상 구분 (예: 50% 이상이면 경고색)
                 const aiBadgeClass = item.ai_generated >= 50 ? 'bg-danger' : 'bg-success';
 
@@ -371,11 +383,11 @@
     function logout() {
         currentUserId = null;
         currentUsername = null;
-        
+
         // UI 초기화
-        document.getElementById('uploadedFileList').innerHTML = ''; 
+        document.getElementById('uploadedFileList').innerHTML = '';
         document.getElementById('reportList').innerHTML = '';
-        
+
         document.getElementById('authSection').classList.remove('hidden');
         document.getElementById('dashboardSection').classList.add('hidden');
         document.getElementById('loginUsername').value = '';
