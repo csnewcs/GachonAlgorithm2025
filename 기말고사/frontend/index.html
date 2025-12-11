@@ -181,9 +181,25 @@
 
     // 3. 파일 업로드 (/file)
     async function handleUpload() {
-        // ... (formData 생성 부분 동일) ...
+       // 1. DOM 요소 가져오기 (이 부분이 누락되어 있었습니다)
+        const fileInput = document.getElementById('uploadFile');
+        const keywords = document.getElementById('uploadKeywords').value;
+
+        // 2. 파일 선택 여부 검사
+        if (fileInput.files.length === 0) return showAlert('파일을 선택해주세요.', 'danger');
+
+        // 3. FormData 생성 및 데이터 추가 (이 부분이 누락되어 있었습니다)
+        const formData = new FormData();
+        formData.append('file', fileInput.files[0]);
+        formData.append('user_id', currentUserId);
+        
+        // 키워드가 있을 경우에만 추가
+        if (keywords) {
+            formData.append('keywords', keywords);
+        }
 
         try {
+            // 코드에 적어주신 대로 '/file' 엔드포인트로 POST 요청
             const res = await fetch(`${API_BASE_URL}/file`, {
                 method: 'POST',
                 body: formData
@@ -194,8 +210,9 @@
                 
                 showAlert(`업로드 성공!`);
                 fileInput.value = ''; // 파일 입력 초기화
+                document.getElementById('uploadKeywords').value = ''; // 키워드 입력도 초기화해주면 좋습니다
                 
-                // [수정됨] 서버 목록 다시 불러오기 (동기화)
+                // 서버 목록 다시 불러오기 (동기화)
                 fetchUploadedFiles(); 
             } else {
                 showAlert('업로드 실패', 'danger');

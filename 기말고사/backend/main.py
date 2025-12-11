@@ -22,7 +22,7 @@ REPORT_DIR = Path('reports')
 MAXIMUM_LENGTH = 10000
 
 # 지원되는 확장자
-ALLOWED_EXT = {'.pdf'}
+ALLOWED_EXT = {'.pdf', '.PDF'}
 
 try:
     import PyPDF2
