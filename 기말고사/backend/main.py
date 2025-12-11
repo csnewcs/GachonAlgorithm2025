@@ -9,6 +9,7 @@ import database
 from threading import Thread
 import queue
 import json
+import ssl
 
 database = database.Database()
 app = Flask(__name__)
@@ -274,4 +275,6 @@ def list_reports(user_id):
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8080, host='0.0.0.0')
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+    ssl_context.load_cert_chain('./sslkey/fullchain.pem', './sslkey/privkey.pem')
+    app.run(debug=True, port=8080, host='0.0.0.0', ssl_context=ssl_context)

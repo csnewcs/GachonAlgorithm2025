@@ -5,3 +5,4 @@ backend/uploads
 backend/extracted
 backend/user_file_map.json
 backend/reports
+backend/sslkey/*

@@ -22,3 +22,4 @@ pypdf2
    GOOGLE_SEARCHENGINE_ID=구글 커스텀 검색 엔진의 ID
    ``` 
 4. 현재 서버는 localhost:8080에서 돌아감을 상정하고 클라이언트 코드가 짜여 있어요. 만일 다른 환경이라면 [index.html](./frontend/index.html)의 103줄을 수정 후 실행해주세요
+5. SSL 인증서 키를 발급받아 backend/sslkey에 각각 `fullchain.pem`, `privkey.pem` 이란 이름으로 넣어주세요.
